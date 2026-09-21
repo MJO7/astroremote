@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+    <meta name="theme-color" content="#05070a">
+    <title>Live View · AstroRemote</title>
+    <link rel="stylesheet" href="/static/liveview.css">
+  </head>
+  <body>
+    <main class="viewer">
+      <header>
+        <a id="back" href="/" aria-label="Close Live View">‹ CONTROLS</a>
+        <div class="brand"><strong>ASTROREMOTE</strong><span>CAMERA LIVE VIEW</span></div>
+        <span id="live-badge" class="live-badge waiting"><i></i><span>STARTING</span></span>
+      </header>
+      <section class="stage" aria-live="polite">
+        <img id="preview" alt="Live view from the connected camera">
+        <div id="focus-box" class="focus-box" role="slider" tabindex="0" aria-label="Zoom area" aria-valuetext="Center"></div>
+        <div class="zoom-controls" aria-label="Live View zoom controls">
+          <button id="zoom-in" type="button" aria-label="Zoom in">+</button>
+          <strong id="zoom-level">1×</strong>
+          <button id="zoom-out" type="button" aria-label="Zoom out">−</button>
+        </div>
+        <div class="move-controls" aria-label="Move zoom area">
+          <button data-move="up" type="button" aria-label="Move up">↑</button>
+          <button data-move="left" type="button" aria-label="Move left">←</button>
+          <button data-move="center" type="button" aria-label="Center zoom area">•</button>
+          <button data-move="right" type="button" aria-label="Move right">→</button>
+          <button data-move="down" type="button" aria-label="Move down">↓</button>
+        </div>
+        <div id="loading" class="message"><span class="spinner"></span><strong>Starting camera Live View…</strong><small>The first frame can take a few seconds.</small></div>
+        <div id="error" class="message error hidden"><strong>Live View unavailable</strong><p id="error-detail"></p><button id="retry" type="button">TRY AGAIN</button></div>
+      </section>
+      <footer>
+        <span id="camera-name">Connected camera</span>
+        <button id="fullscreen" type="button">FULL SCREEN</button>
+      </footer>
+    </main>
+    <script src="/static/liveview.js" defer></script>
+  </body>
+</html>

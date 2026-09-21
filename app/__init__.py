@@ -1,0 +1,1 @@
+"""AstroRemote application package."""

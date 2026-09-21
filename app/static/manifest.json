@@ -1,0 +1,10 @@
+{
+  "name": "AstroRemote",
+  "short_name": "AstroRemote",
+  "description": "Local Nikon astrophotography intervalometer",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#090a0b",
+  "theme_color": "#090a0b",
+  "orientation": "portrait"
+}

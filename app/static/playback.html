@@ -1,0 +1,34 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+    <meta name="theme-color" content="#07090c">
+    <title>Camera Gallery · AstroRemote</title>
+    <link rel="stylesheet" href="/static/playback.css">
+  </head>
+  <body>
+    <header class="gallery-header">
+      <a href="/">‹ CONTROLS</a>
+      <div><strong>ASTROREMOTE</strong><span>CAMERA GALLERY</span></div>
+      <button id="refresh" type="button">REFRESH</button>
+    </header>
+    <main>
+      <section class="gallery-title">
+        <div><h1>Camera card</h1><p id="summary">Reading images…</p></div>
+        <span class="read-only">READ ONLY</span>
+      </section>
+      <div id="notice" class="notice">Thumbnails load as you scroll. Images remain untouched on the camera.</div>
+      <div id="gallery" class="gallery" aria-live="polite"></div>
+      <div id="loading" class="state"><span class="spinner"></span><strong>Reading camera card…</strong></div>
+      <div id="empty" class="state hidden"><strong>No images found</strong><p>The camera card did not report any media files.</p></div>
+      <div id="error" class="state hidden"><strong>Couldn’t open the camera gallery</strong><p id="error-detail"></p><button id="retry" type="button">TRY AGAIN</button></div>
+    </main>
+    <div id="lightbox" class="lightbox hidden" role="dialog" aria-modal="true" aria-label="Camera image preview">
+      <header><button id="close" type="button">×</button><strong id="viewer-name"></strong><span id="viewer-count"></span></header>
+      <div class="image-stage"><button id="previous" class="nav previous" type="button" aria-label="Previous image">‹</button><img id="viewer-image" alt="Selected camera image"><button id="next" class="nav next" type="button" aria-label="Next image">›</button></div>
+      <footer id="viewer-folder"></footer>
+    </div>
+    <script src="/static/playback.js" defer></script>
+  </body>
+</html>

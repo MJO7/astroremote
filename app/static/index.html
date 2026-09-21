@@ -1,0 +1,134 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+    <meta name="theme-color" content="#090a0b">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <meta name="apple-mobile-web-app-title" content="AstroRemote">
+    <title>AstroRemote</title>
+    <link rel="manifest" href="/manifest.json">
+    <link rel="stylesheet" href="/static/style.css">
+  </head>
+  <body>
+    <main class="app-shell">
+      <header class="topbar">
+        <div>
+          <p class="eyebrow">ASTROREMOTE</p>
+          <div class="camera-line">
+            <span id="camera-dot" class="status-dot"></span>
+            <span id="camera-name">Checking camera…</span>
+          </div>
+          <p id="camera-port" class="camera-port">—</p>
+        </div>
+        <div class="header-actions">
+          <span id="simulation-badge" class="badge hidden">SIMULATION</span>
+          <button id="refresh-camera" class="icon-button" type="button" aria-label="Refresh camera">↻</button>
+        </div>
+      </header>
+
+      <div id="alert" class="alert hidden" role="alert"></div>
+
+      <section class="panel controls-panel" aria-labelledby="setup-heading">
+        <div class="section-heading">
+          <h1 id="setup-heading">Imaging sequence</h1>
+          <span id="connection-label" class="connection-label">DISCONNECTED</span>
+        </div>
+        <form id="sequence-form">
+          <div class="field-grid three-up">
+            <label>
+              <span>EXPOSURE</span>
+              <div class="number-wrap"><input id="exposure" type="number" min="0.1" max="86400" step="any" value="120" inputmode="decimal" required><em>sec</em></div>
+            </label>
+            <label>
+              <span>INTERVAL</span>
+              <div class="number-wrap"><input id="interval" type="number" min="0" max="86400" step="any" value="5" inputmode="decimal" required><em>sec</em></div>
+            </label>
+            <label>
+              <span>SHOTS</span>
+              <div class="number-wrap"><input id="shots" type="number" min="1" max="100000" step="1" value="20" inputmode="numeric" required></div>
+            </label>
+          </div>
+
+          <div class="field-grid two-up">
+            <label>
+              <span>ISO</span>
+              <select id="iso" disabled><option>Unavailable</option></select>
+              <small id="iso-help"></small>
+            </label>
+            <label>
+              <span>APERTURE</span>
+              <select id="aperture" disabled><option>Unavailable</option></select>
+              <small id="aperture-help"></small>
+            </label>
+          </div>
+
+          <label class="output-field">
+            <span>SAVE IMAGES TO</span>
+            <select id="storage-destination">
+              <option value="computer">This Mac</option>
+              <option value="camera">Camera memory card</option>
+            </select>
+            <small id="storage-help">Download and verify each image on this Mac</small>
+          </label>
+
+          <label id="computer-folder-field" class="output-field">
+            <span>OUTPUT FOLDER</span>
+            <div class="path-input"><strong id="output-root">…/AstroRemote/</strong><input id="output-subdirectory" type="text" placeholder="optional-night-folder" autocapitalize="none" autocomplete="off"></div>
+            <small>Set the Mac root with ASTROREMOTE_OUTPUT_ROOT; choose a session subfolder here</small>
+          </label>
+
+          <button id="start-button" class="primary-button" type="submit" disabled>START SEQUENCE</button>
+        </form>
+      </section>
+
+      <section class="panel camera-controls-panel" aria-labelledby="camera-controls-heading">
+        <div class="section-heading">
+          <h2 id="camera-controls-heading">Camera display</h2>
+          <span id="display-mode-label" class="connection-label">REMOTE</span>
+        </div>
+        <p>Open a low-latency camera preview on this Mac, or return the Nikon to its local menus/playback.</p>
+        <div class="camera-button-grid">
+          <button id="liveview-button" class="secondary-button" type="button" disabled>OPEN LIVE VIEW</button>
+          <button id="playback-button" class="secondary-button" type="button" disabled>CAMERA GALLERY</button>
+        </div>
+        <small id="display-help">Availability depends on controls reported by the camera.</small>
+      </section>
+
+      <section class="panel status-panel" aria-live="polite">
+        <div class="state-row">
+          <span id="state" class="state-pill">IDLE</span>
+          <span id="frame-count">0 / 0 frames</span>
+        </div>
+        <div class="countdown-block">
+          <strong id="countdown">00:00</strong>
+          <span id="countdown-label">ready</span>
+        </div>
+        <div class="progress-track large"><div id="exposure-progress" class="progress-fill"></div></div>
+        <div class="sequence-progress-row"><span>Sequence</span><span id="sequence-percent">0%</span></div>
+        <div class="progress-track"><div id="sequence-progress" class="progress-fill"></div></div>
+
+        <dl class="file-status">
+          <div><dt>Last completed</dt><dd id="last-completed">—</dd></div>
+          <div><dt>Current</dt><dd id="current-file">—</dd></div>
+          <div><dt>Next</dt><dd id="next-file">—</dd></div>
+        </dl>
+        <button id="stop-button" class="stop-button" type="button" disabled>STOP</button>
+      </section>
+
+      <details class="panel log-panel">
+        <summary>Session log <span>›</span></summary>
+        <div id="event-log" class="log-output"><p class="muted">No events yet.</p></div>
+      </details>
+
+      <details class="panel log-panel">
+        <summary>Advanced / Debug <span>›</span></summary>
+        <div id="debug-log" class="log-output debug-output"><p class="muted">Raw gphoto2 output appears here.</p></div>
+      </details>
+
+      <footer>Keep this computer powered and connected to the camera.</footer>
+    </main>
+    <script src="/static/app.js" defer></script>
+  </body>
+</html>
