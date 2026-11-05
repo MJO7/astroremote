@@ -3,7 +3,7 @@ import asyncio
 import pytest
 
 from app.camera import SimulatedCamera
-from app.models import CameraDisplayMode, SequenceRequest, SequenceState, StorageDestination
+from app.models import CameraDisplayMode, FocusDirection, SequenceRequest, SequenceState, StorageDestination
 from app.sequence import SequenceConflictError, SequenceController, SequenceValidationError, next_sequence_number
 
 
@@ -27,6 +27,16 @@ def test_next_sequence_number_avoids_existing_files(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_physical_sequence_rejects_subsecond_bulb_exposure(tmp_path):
+    camera = SimulatedCamera()
+    controller = SequenceController(camera, tmp_path)
+    controller.camera_info.simulation = False
+    with pytest.raises(SequenceValidationError, match="at least 1 second"):
+        await controller.start(request(exposure=0.5))
+    assert not controller.running
+
+
+@pytest.mark.asyncio
 async def test_sequence_progression_and_unique_filenames(tmp_path):
     camera = SimulatedCamera(time_scale=0.02)
     controller = SequenceController(camera, tmp_path)
@@ -41,27 +51,46 @@ async def test_sequence_progression_and_unique_filenames(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_interval_occurs_after_download(tmp_path):
+@pytest.mark.parametrize("download_delay, interval", [(0.04, 0.12), (0.12, 0.04)])
+async def test_download_time_counts_toward_interval(tmp_path, download_delay, interval):
     class RecordingCamera(SimulatedCamera):
         def __init__(self):
             super().__init__(time_scale=1)
             self.starts = []
+            self.exposure_finished = []
             self.download_finished = []
 
         async def start_bulb(self):
             self.starts.append(asyncio.get_running_loop().time())
             await super().start_bulb()
 
+        async def capture_bulb(self, *args, downloading_callback=None, **kwargs):
+            async def record_completion():
+                self.exposure_finished.append(asyncio.get_running_loop().time())
+                if downloading_callback is not None:
+                    await downloading_callback()
+
+            return await super().capture_bulb(
+                *args, downloading_callback=record_completion, **kwargs
+            )
+
         async def download_capture(self, *args, **kwargs):
+            await asyncio.sleep(download_delay)
             result = await super().download_capture(*args, **kwargs)
             self.download_finished.append(asyncio.get_running_loop().time())
             return result
 
     camera = RecordingCamera()
     controller = SequenceController(camera, tmp_path)
-    await controller.start(request(exposure=0.02, interval=0.06, shots=2))
+    await controller.start(request(exposure=0.02, interval=interval, shots=2))
     await controller.wait(timeout=2)
-    assert camera.starts[1] - camera.download_finished[0] >= 0.05
+    gap = camera.starts[1] - camera.exposure_finished[0]
+    if download_delay < interval:
+        assert interval - 0.005 <= gap < interval + 0.03
+        assert camera.starts[1] - camera.download_finished[0] < interval - download_delay + 0.03
+    else:
+        assert camera.starts[1] >= camera.download_finished[0]
+        assert camera.starts[1] - camera.download_finished[0] < 0.03
 
 
 @pytest.mark.asyncio
@@ -156,5 +185,21 @@ async def test_camera_display_controls_are_serialized(tmp_path):
     await controller.start(request(exposure=10))
     with pytest.raises(SequenceConflictError):
         await controller.set_camera_display(CameraDisplayMode.LIVEVIEW)
+    await controller.stop()
+    await controller.wait(timeout=2)
+
+
+@pytest.mark.asyncio
+async def test_focus_controls_are_serialized_with_sequence_state(tmp_path):
+    camera = SimulatedCamera(time_scale=0)
+    controller = SequenceController(camera, tmp_path)
+    await controller.set_camera_display(CameraDisplayMode.LIVEVIEW)
+    result = await controller.adjust_focus(FocusDirection.NEAR, 1)
+    assert result.active
+    assert result.amount == -100
+
+    await controller.start(request(exposure=10))
+    with pytest.raises(SequenceConflictError):
+        await controller.adjust_focus(FocusDirection.FAR, 1)
     await controller.stop()
     await controller.wait(timeout=2)

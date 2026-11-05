@@ -13,6 +13,8 @@ from .models import (
     CameraDisplayMode,
     CameraInfo,
     CameraMediaItem,
+    FocusDirection,
+    FocusResult,
     LogEntry,
     LiveViewStatus,
     SequenceRequest,
@@ -198,6 +200,25 @@ class SequenceController:
             raise CameraError(self.camera.liveview_error or "Live View is not running")
         return await self.camera.next_liveview_frame(after_frame_id)
 
+    async def adjust_focus(self, direction: FocusDirection, step: int) -> FocusResult:
+        async with self._state_lock:
+            if self.running:
+                raise SequenceConflictError("Focus controls are unavailable during an imaging sequence")
+            if not self.camera_info.connected:
+                raise SequenceValidationError("No camera is connected")
+            if not self.camera.liveview_running:
+                raise SequenceValidationError("Start Live View before adjusting focus")
+            async with self.camera_lock:
+                amount = await self.camera.adjust_focus(direction, step)
+        self.log(f"Focus moved {direction.value}: {abs(amount)} steps")
+        return FocusResult(
+            active=self.camera.liveview_running,
+            direction=direction,
+            step=step,
+            amount=amount,
+            simulation=self.camera_info.simulation,
+        )
+
     async def list_camera_media(self) -> list[CameraMediaItem]:
         async with self._state_lock:
             if self.running:
@@ -256,6 +277,11 @@ class SequenceController:
                 raise SequenceConflictError("An imaging sequence is already running")
             if not self.camera_info.connected:
                 raise SequenceValidationError("No camera is connected")
+            if not self.camera_info.simulation and request.exposure < 1:
+                raise SequenceValidationError(
+                    "Nikon Bulb exposures must be at least 1 second. "
+                    "Use 2 seconds for a short test shot."
+                )
             self._validate_choices(request)
             output: Path | None = None
             if request.storage_destination == StorageDestination.COMPUTER:
@@ -344,6 +370,13 @@ class SequenceController:
                     await self.camera.set_iso(request.iso)
                 if request.aperture is not None:
                     await self.camera.set_aperture(request.aperture)
+                if self.camera_config.focus_mode.current in {"AF-S", "AF-A", "AF-C"}:
+                    self.log(
+                        "Camera reports autofocus mode; in a dark scene the Nikon may block "
+                        "the shutter until focus locks. Select MF on the camera or lens "
+                        "before starting an astrophotography sequence.",
+                        "warning",
+                    )
 
                 number = next_sequence_number(output) if output is not None else 1
                 for frame in range(1, request.shots + 1):
@@ -368,13 +401,20 @@ class SequenceController:
                     self._touch()
                     self.log(f"Exposure {frame}/{request.shots} started")
 
+                    exposure_finished_at: float | None = None
+
+                    async def mark_downloading() -> None:
+                        nonlocal exposure_finished_at
+                        exposure_finished_at = asyncio.get_running_loop().time()
+                        await self._downloading()
+
                     result = await self.camera.capture_bulb(
                         request.exposure,
                         pattern,
                         self._stop_event,
                         download=request.storage_destination == StorageDestination.COMPUTER,
                         progress_callback=self._progress,
-                        downloading_callback=self._downloading,
+                        downloading_callback=mark_downloading,
                     )
                     if result.saved_name is not None:
                         self.status.last_completed = result.saved_name
@@ -388,7 +428,11 @@ class SequenceController:
 
                     number += 1
                     if frame < request.shots and request.interval > 0:
-                        await self._run_interval(request.interval)
+                        # Saving and transfer time count toward the gap between
+                        # shutter close and the next exposure, rather than being
+                        # added before a fresh interval timer starts.
+                        deadline = (exposure_finished_at or asyncio.get_running_loop().time()) + request.interval
+                        await self._run_interval_until(deadline)
                         if self._stop_event.is_set():
                             break
 
@@ -430,9 +474,8 @@ class SequenceController:
                     self.log(f"Could not restore camera playback controls: {exc}", "warning")
             await self.keep_awake.stop()
 
-    async def _run_interval(self, seconds: float) -> None:
+    async def _run_interval_until(self, deadline: float) -> None:
         loop = asyncio.get_running_loop()
-        deadline = loop.time() + seconds
         self.status.state = SequenceState.INTERVAL
         while True:
             remaining = max(0.0, deadline - loop.time())

@@ -27,6 +27,11 @@ class CameraDisplayMode(str, Enum):
     PLAYBACK = "playback"
 
 
+class FocusDirection(str, Enum):
+    NEAR = "near"
+    FAR = "far"
+
+
 class CameraInfo(BaseModel):
     connected: bool = False
     name: str | None = None
@@ -41,6 +46,9 @@ class ConfigProperty(BaseModel):
     available: bool = False
     current: str | None = None
     choices: list[str] = Field(default_factory=list)
+    minimum: float | None = None
+    maximum: float | None = None
+    step: float | None = None
     message: str | None = None
 
 
@@ -52,6 +60,9 @@ class CameraConfig(BaseModel):
     capture_target: ConfigProperty = Field(default_factory=ConfigProperty)
     viewfinder: ConfigProperty = Field(default_factory=ConfigProperty)
     application_mode: ConfigProperty = Field(default_factory=ConfigProperty)
+    manual_focus: ConfigProperty = Field(default_factory=ConfigProperty)
+    focus_mode: ConfigProperty = Field(default_factory=ConfigProperty)
+    liveview_focus: ConfigProperty = Field(default_factory=ConfigProperty)
 
 
 class CameraDisplayRequest(BaseModel):
@@ -62,6 +73,19 @@ class LiveViewStatus(BaseModel):
     active: bool
     frame_id: int = 0
     error: str | None = None
+    simulation: bool = False
+
+
+class FocusRequest(BaseModel):
+    direction: FocusDirection
+    step: int = Field(ge=1, le=3)
+
+
+class FocusResult(BaseModel):
+    active: bool
+    direction: FocusDirection
+    step: int
+    amount: int
     simulation: bool = False
 
 

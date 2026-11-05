@@ -53,6 +53,13 @@ def test_liveview_page_and_lifecycle_api(tmp_path):
         page = client.get("/liveview")
         assert page.status_code == 200
         assert "CAMERA LIVE VIEW" in page.text
+        assert 'id="preview-exposure"' in page.text
+        assert 'id="preview-contrast"' in page.text
+        assert 'id="preview-saturation"' in page.text
+        assert 'id="reset-preview"' in page.text
+        assert 'id="lens-focus"' in page.text
+        assert 'id="focus-toggle"' in page.text
+        assert 'id="focus-step"' in page.text
 
         started = client.post("/api/liveview/start")
         assert started.status_code == 200
@@ -61,9 +68,22 @@ def test_liveview_page_and_lifecycle_api(tmp_path):
         status = client.get("/api/liveview/status")
         assert status.json()["active"] is True
 
+        focused = client.post("/api/liveview/focus", json={"direction": "near", "step": 2})
+        assert focused.status_code == 200
+        assert focused.json()["active"] is True
+        assert focused.json()["amount"] == -600
+
         stopped = client.post("/api/liveview/stop")
         assert stopped.status_code == 200
         assert stopped.json()["active"] is False
+
+
+def test_liveview_focus_rejects_invalid_step(tmp_path):
+    app = create_app(simulate=True, output_root=tmp_path)
+    with TestClient(app) as client:
+        client.post("/api/liveview/start")
+        response = client.post("/api/liveview/focus", json={"direction": "far", "step": 4})
+        assert response.status_code == 422
 
 
 def test_camera_gallery_page_list_and_thumbnail(tmp_path):
@@ -87,4 +107,3 @@ def test_camera_gallery_page_list_and_thumbnail(tmp_path):
 
         missing = client.get("/api/gallery/thumbnail", params={"path": "/not-indexed.NEF"})
         assert missing.status_code == 404
-

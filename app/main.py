@@ -18,6 +18,8 @@ from .models import (
     CameraDisplayRequest,
     CameraInfo,
     CameraMediaItem,
+    FocusRequest,
+    FocusResult,
     LiveViewStatus,
     RuntimeInfo,
     SequenceRequest,
@@ -211,6 +213,16 @@ def create_app(
                 "X-Accel-Buffering": "no",
             },
         )
+
+    @app.post("/api/liveview/focus", response_model=FocusResult)
+    async def adjust_liveview_focus(configuration: FocusRequest) -> FocusResult:
+        try:
+            async with liveview_api_lock:
+                return await controller.adjust_focus(configuration.direction, configuration.step)
+        except SequenceConflictError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        except (SequenceValidationError, CameraError, RuntimeError) as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
 
     @app.get("/api/gallery", response_model=list[CameraMediaItem])
     async def camera_gallery() -> list[CameraMediaItem]:

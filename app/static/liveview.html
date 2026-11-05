@@ -22,6 +22,45 @@
           <strong id="zoom-level">1×</strong>
           <button id="zoom-out" type="button" aria-label="Zoom out">−</button>
         </div>
+        <aside class="image-controls" aria-label="Preview image adjustments">
+          <div class="image-controls-heading">
+            <span>PREVIEW ADJUSTMENTS</span>
+            <button id="reset-preview" type="button">RESET</button>
+          </div>
+          <label for="preview-exposure"><span>EXPOSURE</span><output id="exposure-value">0.0 EV</output></label>
+          <input id="preview-exposure" type="range" min="-2" max="2" value="0" step="0.1">
+          <label for="preview-contrast"><span>CONTRAST</span><output id="contrast-value">100%</output></label>
+          <input id="preview-contrast" type="range" min="50" max="200" value="100" step="1">
+          <label for="preview-saturation"><span>SATURATION</span><output id="saturation-value">100%</output></label>
+          <input id="preview-saturation" type="range" min="0" max="200" value="100" step="1">
+          <small>Display only · captured images are unchanged</small>
+        </aside>
+        <aside id="lens-focus" class="lens-focus" aria-label="Electronic lens focus controls">
+          <button id="focus-toggle" class="focus-tab" type="button" aria-expanded="false" aria-controls="focus-panel">
+            <span>FOCUS</span><b aria-hidden="true">›</b>
+          </button>
+          <div id="focus-panel" class="focus-panel" inert>
+            <div class="focus-heading">
+              <div><small>LENS DRIVE</small><strong>MANUAL FOCUS</strong></div>
+              <i id="focus-indicator" aria-hidden="true"></i>
+            </div>
+            <button class="focus-drive" data-focus-direction="far" type="button">
+              <span class="focus-arrow" aria-hidden="true">↑</span>
+              <span><strong>FAR</strong><small>Hold to repeat</small></span>
+            </button>
+            <label class="focus-step" for="focus-step">
+              <span>PULSE SIZE</span><output id="focus-step-value">FINE · 100</output>
+            </label>
+            <input id="focus-step" class="focus-step-slider" type="range" min="1" max="3" value="1" step="1" aria-label="Focus pulse size">
+            <div class="focus-step-marks" aria-hidden="true"><span>FINE</span><span>MED</span><span>COARSE</span></div>
+            <button class="focus-drive" data-focus-direction="near" type="button">
+              <span class="focus-arrow" aria-hidden="true">↓</span>
+              <span><strong>NEAR</strong><small>Hold to repeat</small></span>
+            </button>
+            <p id="focus-status" class="focus-status" role="status">READY</p>
+            <small class="focus-help">Electronic-focus lens required. Set its switch to A/M, M/A, or A—not M.</small>
+          </div>
+        </aside>
         <div class="move-controls" aria-label="Move zoom area">
           <button data-move="up" type="button" aria-label="Move up">↑</button>
           <button data-move="left" type="button" aria-label="Move left">←</button>

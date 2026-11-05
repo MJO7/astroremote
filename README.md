@@ -29,8 +29,8 @@ The web UI can select only a relative subfolder beneath this root. Absolute path
 
 The **Save images to** control offers two modes:
 
-- **This Mac** — the camera capture target is switched to Internal RAM, each image is downloaded into the configured Mac root/session subfolder, and the frame is counted only after the local file exists.
-- **Camera memory card** — the target is switched to Memory card and AstroRemote waits for the camera's `FILEADDED` event without downloading a Mac copy. The Nikon assigns its normal `DSC_...` filename.
+- **This Mac** — the camera captures to its memory card and gphoto2 downloads each image into the configured Mac root/session subfolder. A frame is counted only after the local file exists. The card is used as the camera's capture target even when the Mac is the selected destination.
+- **Camera memory card** — the target is switched to Memory card and AstroRemote waits for the camera's `FILEADDED` event without downloading a Mac copy. If that event is missed, it checks for a newly added card file and allows extra processing time (at least 30 seconds, or the exposure duration plus 30 seconds). The Nikon assigns its normal `DSC_...` filename.
 
 To use a particular Mac folder, set its absolute path as the server-controlled root and optionally enter a session subfolder in the UI:
 
@@ -79,14 +79,14 @@ If the LAN URL is not reachable, allow incoming connections for Python/Uvicorn i
 
 ## Camera preparation
 
-1. Put the Nikon in manual exposure mode and switch the lens to manual focus.
+1. Put the Nikon in manual exposure mode. For hand focusing, use the lens's M position. To use AstroRemote's electronic focus panel, the lens must support motor focus and its physical switch must remain at A, A/M, or M/A (not M).
 2. Disable camera auto-off or set its timeout long enough for the session when possible.
 3. Connect the camera directly by USB and turn it on. Avoid an unreliable or unpowered hub.
 4. Close Photos, Image Capture, camera-import applications, and other `gphoto2` processes.
 5. Start AstroRemote and press the camera refresh button.
 6. Confirm that the UI shows the detected model, port, and camera-reported ISO/aperture choices.
 
-Aperture control depends on the attached lens and what libgphoto2 exposes. A manual lens may not expose an aperture control; AstroRemote disables the control rather than inventing values. Long-exposure duration is deliberately independent of the camera’s normal shutter-speed choices.
+Aperture control depends on the attached lens and what libgphoto2 exposes. A manual lens may not expose an aperture control; AstroRemote disables the control rather than inventing values. Long-exposure duration is deliberately independent of the camera’s normal shutter-speed choices. Physical Nikon Bulb exposures must be at least 1 second; use 2 seconds or longer for a test shot. Shorter requests are rejected before the shutter command because gphoto2 may round a 0.5-second wait down to zero.
 
 ## macOS USB/PTP ownership
 
@@ -122,9 +122,9 @@ When a USB-claim error occurs, the UI offers a release button. The helper has no
 ## Reliability behavior
 
 - A single background task owns a single camera lock for the complete sequence. Multiple browsers can watch, but cannot start competing sequences or refresh/configure the camera mid-capture.
-- Bulb is closed in a `finally` block. A normal completion, STOP, camera error, or task cancellation all attempt `/main/actions/bulb=0`.
-- STOP sets a server-side cancellation event. Exposure and interval timers check it repeatedly; the HTTP request itself does not wait for a long exposure.
-- After closing Bulb, AstroRemote waits for the resulting camera event. In Mac mode, a frame is counted only after a new local file exists. In memory-card mode, it is counted only after gphoto2 reports the camera's `FILEADDED` event.
+- The combined capture command closes Bulb after the requested exposure. If it fails or is interrupted mid-exposure, a separate emergency `/main/actions/bulb=0` is attempted.
+- STOP sets a server-side cancellation event. During an exposure it cancels the current camera command and attempts to close Bulb; after exposure time has elapsed it lets the current camera command finish saving/downloading the frame, then prevents the next shot. The HTTP request itself does not wait for a long exposure.
+- After closing Bulb, AstroRemote waits for the resulting camera event. In Mac mode, it exits the wait as soon as the new image is downloaded and counts a frame only after a new local file exists. The interval clock starts when exposure completes, so download time is included in the interval. If saving takes longer than the requested interval, the next shot starts as soon as the camera is available. In memory-card mode, a frame is counted only after gphoto2 reports the camera's `FILEADDED` event or a fresh card listing confirms a new file.
 - Filenames use `light_0001.%C`, preserving the camera’s real extension. Existing `light_NNNN.*` files are scanned before the sequence and rechecked before every frame. AstroRemote never enables force-overwrite.
 - Raw `gphoto2` output is kept in the Advanced/Debug panel. Nikon `UNKNOWN PTP Property` notifications do not cause failure by themselves; exit status plus the required local file or camera-card event decide success.
 - On macOS, a `caffeinate -dims` child process runs only while a sequence is active. It is terminated afterward. On Linux/Raspberry Pi, configure the desktop or system power manager not to suspend during imaging.
@@ -136,6 +136,8 @@ When idle, the **Camera display** panel can send the controls actually reported 
 
 - **Open Live View** opens a dedicated `/liveview` page and starts one persistent `gphoto2 --stdout --capture-movie` process. JPEG preview frames go directly to the browser without transcoding. AstroRemote retains only the newest frame, so a slow browser drops stale frames instead of accumulating lag.
 - Live View includes 1×, 2×, 4×, and 8× browser-side magnification. Drag the blue target, use the direction pad, or press the keyboard arrow keys to move the zoom area. This changes only the display and never interrupts the camera preview stream.
+- The enlarged zoom target can reach every visible image corner. Real-time exposure, contrast, and saturation sliders alter only the browser preview; **Reset** restores neutral preview color, 1× zoom, and a centered target. Captured camera files are never modified.
+- The collapsed **Focus** rail on the left drives the camera-reported electronic focus motor toward near or far. Choose a fine, medium, or coarse relative pulse (100, 600, or 2000 steps); tap once for one movement or hold a direction to repeat while watching Live View. Each focus adjustment restarts the gphoto2 Live View stream.
 - **Camera Gallery** opens `/playback`, recursively reads the camera card, and presents camera-generated thumbnails in a responsive newest-first grid. Thumbnails are lazy-loaded and cached in bounded memory. Selecting one opens a larger lightbox with previous/next controls.
 - Gallery access is deliberately read-only: there are no delete, rename, or write operations, and original NEF/JPEG files remain on the camera card.
 - Starting a sequence automatically exits camera-side Live View/playback mode before Bulb control.
@@ -168,6 +170,7 @@ If the process is forcibly killed by the operating system, no application can ru
 - `POST /api/liveview/start` and `POST /api/liveview/stop` — manage the persistent preview session
 - `GET /api/liveview/stream` — latest-frame multipart preview stream
 - `GET /api/liveview/status` — preview process state and frame number
+- `POST /api/liveview/focus` — apply a camera-reported near/far electronic-focus pulse and restart the preview stream
 - `GET /playback` — read-only, scrollable camera-card gallery
 - `GET /api/gallery` — recursively list camera-card media
 - `GET /api/gallery/thumbnail?path=...` — retrieve a camera-generated preview for an indexed file
@@ -189,7 +192,7 @@ source .venv/bin/activate
 pytest -q
 ```
 
-The suite covers validation, path confinement, both storage targets, filename collision avoidance, camera-card event verification, Live View/playback serialization, subprocess argument invocation, sequence progression, post-download interval timing, STOP during exposure and interval, simulated failures/disconnection, state retrieval, concurrency protection, and Bulb-close attempts after failure.
+The suite covers validation, path confinement, both storage targets, filename collision avoidance, camera-card event verification, Live View/playback serialization, subprocess argument invocation, sequence progression, exposure-completion interval timing, STOP during exposure and interval, simulated failures/disconnection, state retrieval, concurrency protection, and Bulb-close attempts after failure.
 
 ## Physical Nikon D3500 verification checklist
 
@@ -199,7 +202,7 @@ Start with a short session in an empty output folder:
 2. Start AstroRemote normally and verify the same camera appears in the UI.
 3. Confirm ISO and aperture choices match `gphoto2 --get-config /main/imgsettings/iso` and the aperture path discovered by `gphoto2 --list-config`.
 4. Shoot one 5-second exposure. Confirm the physical shutter opens and closes, a uniquely named NEF appears, and the UI counts the frame only after download.
-5. Shoot a 30-second, two-frame sequence with a 5-second interval. Confirm the five seconds begin after the first file finishes downloading.
+5. Shoot a 30-second, two-frame sequence with a 5-second interval. Confirm the second exposure begins about five seconds after the first exposure completes, including any download time in that interval.
 6. During a 30-second exposure, press STOP. Confirm the shutter closes promptly, any produced image is downloaded, and no second exposure begins.
 7. Press STOP during an interval. Confirm the next exposure never starts.
 8. Lock the phone or close Safari during a two-frame sequence, then reconnect. Confirm imaging continued and the current status is restored.

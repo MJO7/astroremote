@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Awaitable, Callable
 
-from .models import CameraConfig, CameraDisplayMode, CameraInfo, ConfigProperty, StorageDestination
+from .models import CameraConfig, CameraDisplayMode, CameraInfo, ConfigProperty, FocusDirection, StorageDestination
 
 
 class CameraError(RuntimeError):
@@ -82,6 +82,10 @@ class GPhotoCamera:
     CAPTURE_TARGET_CANDIDATES = ("/main/settings/capturetarget",)
     VIEWFINDER_CANDIDATES = ("/main/actions/viewfinder",)
     APPLICATION_MODE_CANDIDATES = ("/main/capturesettings/applicationmode",)
+    MANUAL_FOCUS_CANDIDATES = ("/main/actions/manualfocusdrive",)
+    FOCUS_MODE_CANDIDATES = ("/main/capturesettings/focusmode2",)
+    LIVEVIEW_FOCUS_CANDIDATES = ("/main/capturesettings/liveviewaffocus",)
+    FOCUS_AMOUNTS = {1: 100, 2: 600, 3: 2000}
     OWNERSHIP_MARKERS = (
         "Could not claim the USB device",
         "Could not claim interface",
@@ -127,6 +131,7 @@ class GPhotoCamera:
 
     async def _run(self, *args: str, timeout: float | None = None, check: bool = True) -> CommandResult:
         argv = (self.executable, *args)
+        await _call(self.debug_callback, f"$ gphoto2 {' '.join(args)} (started)")
         async with self._command_lock:
             try:
                 process = await asyncio.create_subprocess_exec(
@@ -153,7 +158,10 @@ class GPhotoCamera:
                     except ProcessLookupError:
                         pass
                     await process.wait()
-                raise CameraError(f"gphoto2 timed out while running {args[0] if args else 'command'}") from exc
+                raise CameraError(
+                    f"gphoto2 timed out after {timeout or self.command_timeout:g} seconds "
+                    f"while running {' '.join(args)}"
+                ) from exc
             except asyncio.CancelledError:
                 # A cancelled capture process must not remain alive and retain USB ownership.
                 try:
@@ -271,6 +279,7 @@ class GPhotoCamera:
         result = await self._run("--get-config", path)
         current: str | None = None
         choices: list[str] = []
+        range_values: dict[str, float] = {}
         for line in result.stdout.splitlines():
             if line.startswith("Current:"):
                 current = line.partition(":")[2].strip()
@@ -278,7 +287,19 @@ class GPhotoCamera:
                 match = re.match(r"Choice:\s+\d+\s+(.*)$", line)
                 if match:
                     choices.append(match.group(1).strip())
-        return ConfigProperty(path=path, available=True, current=current, choices=choices)
+            else:
+                match = re.match(r"^(Bottom|Top|Step):\s+(-?(?:\d+(?:\.\d*)?|\.\d+))$", line)
+                if match:
+                    range_values[match.group(1)] = float(match.group(2))
+        return ConfigProperty(
+            path=path,
+            available=True,
+            current=current,
+            choices=choices,
+            minimum=range_values.get("Bottom"),
+            maximum=range_values.get("Top"),
+            step=range_values.get("Step"),
+        )
 
     @staticmethod
     def _find_config_path(paths: list[str], candidates: tuple[str, ...], hints: tuple[str, ...]) -> str | None:
@@ -311,6 +332,9 @@ class GPhotoCamera:
             capture_target=await fetch(self.CAPTURE_TARGET_CANDIDATES, ("capturetarget",), "capture destination"),
             viewfinder=await fetch(self.VIEWFINDER_CANDIDATES, ("viewfinder",), "Live View"),
             application_mode=await fetch(self.APPLICATION_MODE_CANDIDATES, ("applicationmode",), "camera playback mode"),
+            manual_focus=await fetch(self.MANUAL_FOCUS_CANDIDATES, ("manualfocusdrive",), "manual focus drive"),
+            focus_mode=await fetch(self.FOCUS_MODE_CANDIDATES, ("focusmode2",), "remote focus mode"),
+            liveview_focus=await fetch(self.LIVEVIEW_FOCUS_CANDIDATES, ("liveviewaffocus",), "Live View focus mode"),
         )
         return self.config
 
@@ -337,8 +361,9 @@ class GPhotoCamera:
 
     def storage_choice(self, destination: StorageDestination) -> str | None:
         prop = self.config.capture_target
-        if destination == StorageDestination.COMPUTER:
-            return self._choice_matching(prop, "internal ram", "sdram")
+        # Nikon's proven tethered capture path stages the frame on the card
+        # before gphoto2 downloads it to the Mac. Internal RAM did not trigger
+        # a shutter release on the D3500 used for physical verification.
         return self._choice_matching(prop, "memory card", "card")
 
     async def configure_storage(self, destination: StorageDestination) -> None:
@@ -377,7 +402,7 @@ class GPhotoCamera:
         await self.set_config(application.path, playback)
         application.current = playback
 
-    async def start_liveview(self) -> None:
+    async def start_liveview(self, *, focus_amount: int | None = None) -> None:
         """Start one persistent, untranscoded preview stream from the camera."""
         if self.liveview_running:
             return
@@ -395,7 +420,30 @@ class GPhotoCamera:
         # capture-movie continuously emits concatenated JPEG previews on stdout.
         # Keeping only the newest decoded boundary prevents slow browser clients
         # from adding latency or unbounded memory use.
-        args = ("--stdout", "--capture-movie")
+        args: tuple[str, ...]
+        if focus_amount is None:
+            args = ("--stdout", "--capture-movie")
+        else:
+            manual_focus = self.config.manual_focus
+            if not manual_focus.available or not manual_focus.path:
+                raise CameraError("This camera does not expose electronic manual focus control")
+            focus_args: list[str] = ["--set-config", f"{viewfinder.path}=1"]
+            focus_mode = self.config.focus_mode
+            if focus_mode.available and focus_mode.path:
+                manual_choice = self._choice_matching(focus_mode, "mf (selection)", "manual")
+                if manual_choice:
+                    focus_args.extend(("--set-config", f"{focus_mode.path}={manual_choice}"))
+                    focus_mode.current = manual_choice
+            liveview_focus = self.config.liveview_focus
+            if liveview_focus.available and liveview_focus.path:
+                single_choice = self._choice_matching(liveview_focus, "single-servo")
+                if single_choice:
+                    focus_args.extend(("--set-config", f"{liveview_focus.path}={single_choice}"))
+                    liveview_focus.current = single_choice
+            focus_args.extend(
+                ("--set-config", f"{manual_focus.path}={focus_amount}", "--stdout", "--capture-movie")
+            )
+            args = tuple(focus_args)
         try:
             process = await asyncio.create_subprocess_exec(
                 self.executable,
@@ -428,6 +476,38 @@ class GPhotoCamera:
             raise
         viewfinder.current = "1"
         await _call(self.debug_callback, f"$ gphoto2 {' '.join(args)}\nLive View JPEG stream active")
+
+    async def adjust_focus(self, direction: FocusDirection, step: int) -> int:
+        """Apply one relative electronic-focus pulse and restore the preview stream."""
+        manual_focus = self.config.manual_focus
+        if not manual_focus.available or not manual_focus.path:
+            raise CameraError("The connected camera does not expose electronic manual focus")
+        if manual_focus.minimum is None or manual_focus.maximum is None:
+            raise CameraError("The camera's focus control is not a Nikon relative-step drive")
+        if not self.liveview_running:
+            raise CameraError("Start Live View before adjusting focus")
+        magnitude = self.FOCUS_AMOUNTS.get(step)
+        if magnitude is None:
+            raise CameraError("Focus step must be fine, medium, or coarse")
+        amount = -magnitude if direction == FocusDirection.NEAR else magnitude
+        if manual_focus.minimum is not None and amount < manual_focus.minimum:
+            raise CameraError("Requested focus pulse is below the camera's reported range")
+        if manual_focus.maximum is not None and amount > manual_focus.maximum:
+            raise CameraError("Requested focus pulse is above the camera's reported range")
+
+        # capture-movie owns the USB/PTP session. Restart it with the focus
+        # command in the same gphoto2 invocation so Nikon still sees Live View
+        # when the relative lens-drive command is issued.
+        await self.stop_liveview(send_off=False)
+        try:
+            await self.start_liveview(focus_amount=amount)
+        except CameraError as focus_error:
+            try:
+                await self.start_liveview()
+            except CameraError:
+                pass
+            raise CameraError(f"Focus adjustment failed: {focus_error}") from focus_error
+        return amount
 
     async def _read_liveview_frames(self, stream: asyncio.StreamReader) -> None:
         buffer = bytearray()
@@ -620,15 +700,18 @@ class GPhotoCamera:
         capture_task: asyncio.Task[CommandResult] | None = None
         if download and filename_pattern is None:
             raise CameraError("A computer filename is required when downloading captures")
+        if duration < 1:
+            raise CameraError("Nikon Bulb exposures must be at least 1 second")
+        card_files_before = set(await self.list_camera_files()) if not download else set()
         prefix = filename_pattern.stem if filename_pattern is not None else None
         before = set(filename_pattern.parent.glob(f"{prefix}.*")) if filename_pattern is not None else set()
         completion_args: tuple[str, ...]
         if download:
             assert filename_pattern is not None
             completion_args = (
-                "--filename",
-                str(filename_pattern),
-                "--wait-event-and-download=10s",
+                # A seconds-suffixed wait runs for the full period even after
+                # the file arrives. Exit as soon as the image is downloaded.
+                "--wait-event-and-download=FILEADDED",
             )
         else:
             completion_args = ("--wait-event=10s",)
@@ -639,13 +722,18 @@ class GPhotoCamera:
             # independent emergency bulb-off command.
             capture_task = asyncio.create_task(
                 self._run(
+                    *(("--filename", str(filename_pattern)) if download and filename_pattern is not None else ()),
                     "--set-config",
                     f"{self.BULB_PATH}=1",
-                    f"--wait-event={duration:g}s",
+                    (
+                        f"--wait-event={duration:g}s"
+                        if float(duration).is_integer()
+                        else f"--wait-event={round(duration * 1000)}ms"
+                    ),
                     "--set-config",
                     f"{self.BULB_PATH}=0",
                     *completion_args,
-                    timeout=duration + 25,
+                    timeout=duration + 15,
                     check=False,
                 )
             )
@@ -658,6 +746,12 @@ class GPhotoCamera:
                 try:
                     await asyncio.wait_for(cancellation_event.wait(), timeout=0.25)
                     cancelled = True
+                    if elapsed >= duration:
+                        # The shutter-close/download command may still be in
+                        # flight. Let it finish so STOP does not discard the
+                        # image or suppress gphoto2's diagnostic output.
+                        await asyncio.wait({capture_task}, timeout=0.25)
+                        continue
                     capture_task.cancel()
                     try:
                         await capture_task
@@ -666,7 +760,7 @@ class GPhotoCamera:
                     break
                 except asyncio.TimeoutError:
                     pass
-            result = None if cancelled else await capture_task
+            result = None if capture_task.cancelled() else await capture_task
             if result is not None and result.returncode != 0:
                 self._raise_for_result(result)
             combined_succeeded = result is not None
@@ -679,15 +773,14 @@ class GPhotoCamera:
                     pass
             primary_error = exc
         finally:
-            # The combined command normally closed Bulb already. This redundant command
-            # is intentional: the prior process may have failed after opening the shutter.
-            try:
-                await asyncio.shield(self.stop_bulb())
-            except BaseException as stop_exc:
-                # A successful combined command already closed Bulb and downloaded
-                # the file. The redundant close is best-effort in that one case.
-                if primary_error is None and not combined_succeeded:
-                    primary_error = stop_exc
+            # The combined command already closed Bulb on success. Only issue
+            # an independent close if it failed or was cancelled mid-exposure.
+            if not combined_succeeded:
+                try:
+                    await asyncio.shield(self.stop_bulb())
+                except BaseException as stop_exc:
+                    if primary_error is None:
+                        primary_error = stop_exc
 
         if primary_error is not None:
             raise primary_error
@@ -707,8 +800,39 @@ class GPhotoCamera:
         if not cancelled and download and path is None:
             raise CameraError("gphoto2 completed without downloading an image file")
         if not cancelled and not download and camera_filename is None:
-            raise CameraError("gphoto2 did not report a file saved to the camera memory card")
+            camera_filename = await self._confirm_card_capture(
+                card_files_before, cancellation_event, timeout=max(30.0, duration + 30.0)
+            )
+            cancelled = cancellation_event.is_set()
+            if camera_filename is None and not cancelled:
+                raise CameraError(
+                    "Could not confirm a new image on the camera memory card after waiting "
+                    "for processing. Check camera playback, card capacity/write protection, "
+                    "and Long exposure NR before retrying."
+                )
         return CaptureResult(path=path, cancelled=cancelled, camera_filename=camera_filename)
+
+    async def _confirm_card_capture(
+        self, before: set[str], cancellation_event: asyncio.Event, *, timeout: float
+    ) -> str | None:
+        """Recover a delayed/missed FILEADDED event without counting existing photos."""
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + timeout
+        while not cancellation_event.is_set():
+            added = sorted(set(await self.list_camera_files()) - before)
+            if added:
+                return Path(added[0]).name
+            remaining = deadline - loop.time()
+            if remaining <= 0:
+                return None
+            # Short waits keep STOP responsive while allowing camera-side processing.
+            result = await self._run(
+                "--wait-event=1s", timeout=10, check=True
+            )
+            filename = self._camera_filename_from_output(result.combined)
+            if filename:
+                return filename
+        return None
 
     @staticmethod
     def _camera_filename_from_output(output: str) -> str | None:
@@ -746,7 +870,11 @@ class SimulatedCamera(GPhotoCamera):
             capture_target=ConfigProperty(path="/main/settings/capturetarget", available=True, current="Memory card", choices=["Internal RAM", "Memory card"]),
             viewfinder=ConfigProperty(path="/main/actions/viewfinder", available=True, current="0"),
             application_mode=ConfigProperty(path="/main/capturesettings/applicationmode", available=True, current="Application Mode 0", choices=["Application Mode 0", "Application Mode 1"]),
+            manual_focus=ConfigProperty(path="/main/actions/manualfocusdrive", available=True, current="0", minimum=-32767, maximum=32767, step=1),
+            focus_mode=ConfigProperty(path="/main/capturesettings/focusmode2", available=True, current="AF-A", choices=["AF-S", "AF-C", "AF-A", "MF (fixed)", "MF (selection)"]),
+            liveview_focus=ConfigProperty(path="/main/capturesettings/liveviewaffocus", available=True, current="Single-servo AF", choices=["Single-servo AF", "Full-time-servo AF", "Manual Focus"]),
         )
+        self._sim_focus_position = 0
 
     async def detect(self) -> CameraInfo:
         if not self.connected:
@@ -777,9 +905,7 @@ class SimulatedCamera(GPhotoCamera):
     async def configure_storage(self, destination: StorageDestination) -> None:
         if not self.connected:
             raise CameraDisconnectedError("Simulated camera disconnected")
-        self.config.capture_target.current = (
-            "Internal RAM" if destination == StorageDestination.COMPUTER else "Memory card"
-        )
+        self.config.capture_target.current = "Memory card"
 
     async def restore_capture_target(self, value: str | None) -> None:
         if value:
@@ -808,6 +934,19 @@ class SimulatedCamera(GPhotoCamera):
     async def stop_liveview(self, *, send_off: bool = True) -> None:
         self._sim_liveview_running = False
         self.config.viewfinder.current = "0"
+
+    async def adjust_focus(self, direction: FocusDirection, step: int) -> int:
+        if not self.connected:
+            raise CameraDisconnectedError("Simulated camera disconnected")
+        if not self.liveview_running:
+            raise CameraError("Start Live View before adjusting focus")
+        magnitude = self.FOCUS_AMOUNTS.get(step)
+        if magnitude is None:
+            raise CameraError("Focus step must be fine, medium, or coarse")
+        amount = -magnitude if direction == FocusDirection.NEAR else magnitude
+        self._sim_focus_position = max(-32767, min(32767, self._sim_focus_position + amount))
+        await asyncio.sleep(0.03 * self.time_scale)
+        return amount
 
     async def next_liveview_frame(
         self, after_frame_id: int, *, timeout: float = 15
